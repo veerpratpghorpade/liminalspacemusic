@@ -59,6 +59,13 @@
       <!-- Home -->
       <div id="homePage" class="page active">
         <div class="greeting" id="greeting">Good evening</div>
+        <div id="apiKeyBanner" class="api-key-banner hidden">
+          <div class="api-key-text">
+            <strong>Music source not set up</strong>
+            <span>Add a free Jamendo API key to stream real songs</span>
+          </div>
+          <button class="btn-primary" id="setupApiKeyBtn">Set Up</button>
+        </div>
         <div class="quick-picks" id="quickPicks"></div>
         <div id="recommendations" class="rec-section"></div>
         <div class="section-header">
@@ -262,6 +269,26 @@
         <button class="modal-close" id="closeAddToPlaylistModal">&times;</button>
         <h3>Add to Playlist</h3>
         <div id="addToPlaylistList"></div>
+      </div>
+    </div>
+
+    <!-- API Key Setup Modal -->
+    <div id="apiKeyModal" class="modal hidden">
+      <div class="modal-content">
+        <button class="modal-close" id="closeApiKeyModal">&times;</button>
+        <h3>Set Up Music Source</h3>
+        <p>DarkBeat uses Jamendo's free music catalog. Get a free API key to stream real songs:</p>
+        <ol class="api-steps">
+          <li>Go to <a href="https://devportal.jamendo.com/" target="_blank" rel="noopener">devportal.jamendo.com</a></li>
+          <li>Sign up with your email (free)</li>
+          <li>Click "Register an application"</li>
+          <li>Name it "DarkBeat" → copy the <strong>Client ID</strong></li>
+          <li>Paste it below</li>
+        </ol>
+        <input type="text" id="jamendoApiKeyInput" placeholder="Paste your Jamendo Client ID here...">
+        <button class="btn-primary" id="saveApiKey">Save API Key</button>
+        <div id="apiKeyStatus" style="margin-top:12px;font-size:13px;"></div>
+        <p style="margin-top:16px;font-size:12px;color:var(--text-muted);">Without a key, you can browse tracks but audio won't play. The key is free and stored only on your device.</p>
       </div>
     </div>
   </div>
