@@ -169,12 +169,25 @@ const App = {
   },
 
   async renderHome() {
-    // Load some tracks from Jamendo
+    const qp = document.getElementById('quickPicks');
+    const tn = document.getElementById('trendingNow');
+    const recEl = document.getElementById('recommendations');
+
+    if (!this.jamendoApiKey) {
+      // No key yet — show clean setup state, NO fake tracks
+      qp.innerHTML = '';
+      tn.innerHTML = '';
+      if (recEl) recEl.innerHTML = '';
+      this.checkApiKey();
+      return;
+    }
+
+    // Has key — load real tracks from Jamendo
+    this.checkApiKey();
     const tracks = await this.fetchJamendoTracks('pop', 20);
     this.tracks = tracks;
 
     // Quick picks
-    const qp = document.getElementById('quickPicks');
     qp.innerHTML = tracks.slice(0, 6).map(t => `
       <div class="quick-pick-item" onclick="App.playTrackById('${t.id}')">
         <img src="${t.image}" loading="lazy" alt="">
@@ -186,12 +199,10 @@ const App = {
     this.renderRecommendations();
 
     // Trending
-    const tn = document.getElementById('trendingNow');
     tn.innerHTML = this.generateCards(tracks.slice(12, 18), 'Trending');
 
     // Recently played
     this.renderRecentlyPlayed();
-    this.checkApiKey();
   },
 
   checkApiKey() {
@@ -277,13 +288,34 @@ const App = {
   },
 
   async handleSearch(query) {
-    if (!query.trim()) { document.getElementById('searchResults').innerHTML = ''; return; }
+    const el = document.getElementById('searchResults');
+    if (!query.trim()) { el.innerHTML = ''; return; }
+
+    if (!this.jamendoApiKey) {
+      el.innerHTML = `
+        <div style="padding:40px 20px;text-align:center;">
+          <div style="font-size:48px;margin-bottom:16px;">🔑</div>
+          <h3 style="font-size:18px;margin-bottom:8px;">Music Source Not Set Up</h3>
+          <p style="color:var(--text-muted);font-size:14px;margin-bottom:20px;">
+            Add a free Jamendo API key to search real music.
+          </p>
+          <button class="btn-primary" onclick="App.openApiKeyModal()" style="display:inline-flex;">
+            Set Up API Key
+          </button>
+        </div>
+      `;
+      return;
+    }
+
     const results = await this.fetchJamendoTracks(query, 20);
     this.searchResults = results;
-    // Merge into main tracks pool so they are playable
     results.forEach(r => { if (!this.tracks.find(t => t.id === r.id)) this.tracks.push(r); });
-    const el = document.getElementById('searchResults');
-    if (!results.length) { el.innerHTML = '<p style="color:var(--text-muted);padding:20px;">No results found.</p>'; return; }
+
+    if (!results.length) { 
+      el.innerHTML = '<p style="color:var(--text-muted);padding:20px;">No results found on Jamendo. Try a different search.</p>'; 
+      return; 
+    }
+
     el.innerHTML = results.map(t => `
       <div class="search-result-item" onclick="App.playTrackById('${t.id}')">
         <img src="${t.image}" loading="lazy" alt="">
@@ -295,131 +327,40 @@ const App = {
     `).join('');
   },
 
-  // ---- Jamendo API ----
+  // ---- Jamendo API (REAL music only) ----
   async fetchJamendoTracks(query, limit = 20) {
-    // If user has an API key, try it first
-    if (this.jamendoApiKey) {
-      try {
-        const url = `https://api.jamendo.com/v3.0/tracks/?client_id=${this.jamendoApiKey}&format=json&limit=${limit}&search=${encodeURIComponent(query)}&audioformat=mp32&include=stats`;
-        const res = await fetch(url, { mode: 'cors' });
-        const data = await res.json();
+    // Must have a valid API key to get real tracks from Jamendo
+    if (!this.jamendoApiKey) {
+      return [];
+    }
 
-        if (data.headers && data.headers.status === 'failed') {
-          console.warn('Jamendo API error:', data.headers.error_message);
-        } else {
-          const tracks = (data.results || []).map(t => ({
-            id: 'jam_' + t.id,
-            name: t.name,
-            artist_name: t.artist_name,
-            audio: t.audio,
-            image: t.image || `https://via.placeholder.com/300/1db954/121212?text=${encodeURIComponent(t.name[0] || 'M')}`,
-            duration: t.duration,
-            album_name: t.album_name
-          }));
-          if (tracks.length > 0) return tracks;
-        }
-      } catch (e) {
-        console.warn('Jamendo API failed:', e.message);
+    try {
+      const url = `https://api.jamendo.com/v3.0/tracks/?client_id=${this.jamendoApiKey}&format=json&limit=${limit}&search=${encodeURIComponent(query)}&audioformat=mp32&include=stats`;
+      const res = await fetch(url, { mode: 'cors' });
+      const data = await res.json();
+
+      if (data.headers && data.headers.status === 'failed') {
+        console.warn('Jamendo API error:', data.headers.error_message);
+        return [];
       }
+
+      return (data.results || []).map(t => ({
+        id: 'jam_' + t.id,
+        name: t.name,
+        artist_name: t.artist_name,
+        audio: t.audio,
+        image: t.image || `https://via.placeholder.com/300/1db954/121212?text=${encodeURIComponent(t.name[0] || 'M')}`,
+        duration: t.duration,
+        album_name: t.album_name
+      }));
+    } catch (e) {
+      console.warn('Jamendo API failed:', e.message);
+      return [];
     }
-
-    // Fallback to local fuzzy search
-    return this.searchLocalTracks(query);
-  },
-
-  // ---- Fuzzy Search (Spotify-like) ----
-  searchLocalTracks(query) {
-    const q = query.toLowerCase().trim();
-    if (!q) return this.getLocalTrackLibrary().slice(0, 20);
-
-    const allTracks = this.getLocalTrackLibrary();
-    const results = allTracks.map(t => {
-      const nameScore = this.fuzzyScore(t.name, q);
-      const artistScore = this.fuzzyScore(t.artist_name, q);
-      const albumScore = t.album_name ? this.fuzzyScore(t.album_name, q) : 0;
-      const totalScore = Math.max(nameScore, artistScore * 0.9, albumScore * 0.7);
-      return { track: t, score: totalScore };
-    });
-
-    // Sort by score descending, filter out zero scores
-    return results
-      .filter(r => r.score > 0)
-      .sort((a, b) => b.score - a.score)
-      .map(r => r.track)
-      .slice(0, 20);
-  },
-
-  fuzzyScore(str, query) {
-    if (!str || !query) return 0;
-    const s = str.toLowerCase();
-    const q = query.toLowerCase().trim();
-
-    // Exact match → highest score
-    if (s === q) return 1.0;
-
-    // Contains full query → very high score
-    if (s.includes(q)) return 0.9 + (q.length / s.length) * 0.05;
-
-    // Starts with query → high score
-    if (s.startsWith(q)) return 0.8 + (q.length / s.length) * 0.05;
-
-    // Word starts with query (e.g., "sum" → "Summer Vibes")
-    const words = s.split(/\s+/);
-    if (words.some(w => w.startsWith(q))) return 0.7 + (q.length / s.length) * 0.05;
-
-    // Fuzzy character matching (like typing "smr" for "Summer")
-    let score = 0;
-    let sIdx = 0;
-    for (let qi = 0; qi < q.length && sIdx < s.length; qi++) {
-      const found = s.indexOf(q[qi], sIdx);
-      if (found !== -1) {
-        score += 1;
-        sIdx = found + 1;
-      }
-    }
-    if (score === q.length) {
-      // All characters found in order
-      return 0.3 + (score / s.length) * 0.3;
-    }
-
-    // Partial character match (some characters found)
-    if (score > 0) {
-      return (score / q.length) * 0.2;
-    }
-
-    return 0;
   },
 
   getLocalTrackLibrary() {
-    // Pre-loaded diverse track library - works even when Jamendo API is down
-    return [
-      { id: 'jam_1311433', name: 'On My Way', artist_name: 'Journey', audio: '', image: 'https://via.placeholder.com/300/1db954/121212?text=O', duration: 180, album_name: 'Journey' },
-      { id: 'jam_1311686', name: 'Summer Vibes', artist_name: 'Beach Boys', audio: '', image: 'https://via.placeholder.com/300/1db954/121212?text=S', duration: 200, album_name: 'Summer' },
-      { id: 'jam_1312223', name: 'Chill LoFi', artist_name: 'LoFi Study', audio: '', image: 'https://via.placeholder.com/300/1db954/121212?text=C', duration: 240, album_name: 'LoFi' },
-      { id: 'jam_1314444', name: 'Night Drive', artist_name: 'Synthwave', audio: '', image: 'https://via.placeholder.com/300/1db954/121212?text=N', duration: 210, album_name: 'Synthwave' },
-      { id: 'jam_1315555', name: 'Deep Focus', artist_name: 'Ambient', audio: '', image: 'https://via.placeholder.com/300/1db954/121212?text=D', duration: 300, album_name: 'Focus' },
-      { id: 'jam_1316666', name: 'Workout Energy', artist_name: 'Fitness Beats', audio: '', image: 'https://via.placeholder.com/300/1db954/121212?text=W', duration: 195, album_name: 'Workout' },
-      { id: 'jam_1317777', name: 'Rainy Day', artist_name: 'Piano Dreams', audio: '', image: 'https://via.placeholder.com/300/1db954/121212?text=R', duration: 220, album_name: 'Piano' },
-      { id: 'jam_1318888', name: 'Electronic Dreams', artist_name: 'Techno Star', audio: '', image: 'https://via.placeholder.com/300/1db954/121212?text=E', duration: 250, album_name: 'Electronic' },
-      { id: 'jam_1319999', name: 'Jazz Cafe', artist_name: 'Smooth Jazz', audio: '', image: 'https://via.placeholder.com/300/1db954/121212?text=J', duration: 280, album_name: 'Jazz' },
-      { id: 'jam_1320000', name: 'Road Trip', artist_name: 'Indie Folk', audio: '', image: 'https://via.placeholder.com/300/1db954/121212?text=R', duration: 230, album_name: 'Indie' },
-      { id: 'jam_1321111', name: 'Sunset Chill', artist_name: 'Chill Hop', audio: '', image: 'https://via.placeholder.com/300/1db954/121212?text=S', duration: 260, album_name: 'Chill' },
-      { id: 'jam_1322222', name: 'Dance Floor', artist_name: 'DJ Mix', audio: '', image: 'https://via.placeholder.com/300/1db954/121212?text=D', duration: 210, album_name: 'Dance' },
-      { id: 'jam_1323333', name: 'Morning Coffee', artist_name: 'Acoustic Guitar', audio: '', image: 'https://via.placeholder.com/300/1db954/121212?text=M', duration: 190, album_name: 'Acoustic' },
-      { id: 'jam_1324444', name: 'Starry Night', artist_name: 'Orchestral', audio: '', image: 'https://via.placeholder.com/300/1db954/121212?text=S', duration: 310, album_name: 'Orchestral' },
-      { id: 'jam_1325555', name: 'Urban Beat', artist_name: 'Hip Hop', audio: '', image: 'https://via.placeholder.com/300/1db954/121212?text=U', duration: 200, album_name: 'Hip Hop' },
-      { id: 'jam_1326666', name: 'Tropical Breeze', artist_name: 'Reggae Vibes', audio: '', image: 'https://via.placeholder.com/300/1db954/121212?text=T', duration: 240, album_name: 'Reggae' },
-      { id: 'jam_1327777', name: 'Metal Riff', artist_name: 'Rock Band', audio: '', image: 'https://via.placeholder.com/300/1db954/121212?text=M', duration: 220, album_name: 'Rock' },
-      { id: 'jam_1328888', name: 'Classical Study', artist_name: 'Mozart', audio: '', image: 'https://via.placeholder.com/300/1db954/121212?text=C', duration: 350, album_name: 'Classical' },
-      { id: 'jam_1329999', name: 'Pop Star', artist_name: 'Mainstream', audio: '', image: 'https://via.placeholder.com/300/1db954/121212?text=P', duration: 180, album_name: 'Pop' },
-      { id: 'jam_1330000', name: 'Meditation', artist_name: 'Zen Music', audio: '', image: 'https://via.placeholder.com/300/1db954/121212?text=M', duration: 400, album_name: 'Meditation' },
-      { id: 'jam_1331111', name: 'Love Song', artist_name: 'Romantic', audio: '', image: 'https://via.placeholder.com/300/1db954/121212?text=L', duration: 210, album_name: 'Love' },
-      { id: 'jam_1332222', name: 'Happy Day', artist_name: 'Feel Good', audio: '', image: 'https://via.placeholder.com/300/1db954/121212?text=H', duration: 190, album_name: 'Happy' },
-      { id: 'jam_1333333', name: 'Dark Night', artist_name: 'Gothic', audio: '', image: 'https://via.placeholder.com/300/1db954/121212?text=D', duration: 270, album_name: 'Dark' },
-      { id: 'jam_1334444', name: 'Space Travel', artist_name: 'Cosmic', audio: '', image: 'https://via.placeholder.com/300/1db954/121212?text=S', duration: 290, album_name: 'Space' },
-      { id: 'jam_1335555', name: 'Guitar Solo', artist_name: 'Rock Star', audio: '', image: 'https://via.placeholder.com/300/1db954/121212?text=G', duration: 230, album_name: 'Guitar' },
-      { id: 'jam_1336666', name: 'Latin Groove', artist_name: 'Salsa', audio: '', image: 'https://via.placeholder.com/300/1db954/121212?text=L', duration: 250, album_name: 'Latin' }
-    ];
+    return [];
   },
 
   getFallbackTracks() {
@@ -857,6 +798,11 @@ const App = {
   async renderRecommendations() {
     const el = document.getElementById('recommendations');
     if (!el) return;
+
+    if (!this.jamendoApiKey) {
+      el.innerHTML = '';
+      return;
+    }
 
     // Show loading state
     el.innerHTML = '<div class="rec-loading">Finding songs for you...</div>';
