@@ -35,6 +35,8 @@ const App = {
     // Hide splash after animation
     setTimeout(() => {
       document.getElementById('splash').style.display = 'none';
+      const appLoading = document.getElementById('appLoading');
+      if (appLoading) appLoading.style.display = 'none';
     }, 2700);
   },
 
